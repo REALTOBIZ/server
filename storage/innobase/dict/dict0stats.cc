@@ -2312,7 +2312,7 @@ dict_stats_update_persistent(
 	return(DB_SUCCESS);
 }
 
-#include "mysql_com.h"
+#include "mysql.h"
 /** Save an individual index's statistic into the persistent statistics
 storage.
 @param[in]	index			index to be updated

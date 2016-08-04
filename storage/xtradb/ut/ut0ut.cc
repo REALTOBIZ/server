@@ -42,7 +42,7 @@ Created 5/11/1994 Heikki Tuuri
 # include "btr0types.h"
 # include "trx0trx.h"
 # include "ha_prototypes.h"
-# include "mysql_com.h" /* NAME_LEN */
+# include "mysql.h" /* NAME_LEN */
 # include <string>
 #endif /* UNIV_HOTBACKUP */
 

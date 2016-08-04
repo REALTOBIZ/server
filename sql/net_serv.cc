@@ -37,7 +37,6 @@
 
 #include <my_global.h>
 #include <mysql.h>
-#include <mysql_com.h>
 #include <mysqld_error.h>
 #include <my_sys.h>
 #include <m_string.h>
@@ -308,7 +307,7 @@ static int net_data_is_ready(my_socket sd)
   @param clear_buffer           if <> 0, then clear all data from comm buff
 */
 
-void net_clear(NET *net, my_bool clear_buffer __attribute__((unused)))
+extern "C" void net_clear(NET *net, my_bool clear_buffer __attribute__((unused)))
 {
   DBUG_ENTER("net_clear");
 
@@ -1071,7 +1070,7 @@ end:
 
 #undef my_net_read
 
-ulong my_net_read(NET *net)
+extern "C" ulong my_net_read(NET *net)
 {
   return my_net_read_packet(net, 0);
 }

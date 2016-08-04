@@ -30,7 +30,7 @@
   a correct password. It shows the situation when a number of questions
   is not known in advance.
 */
-
+#include <mysql/plugin.h>
 #include <mysql/plugin_auth.h>
 #include <string.h>
 #include <stdio.h>

@@ -30,6 +30,7 @@
 #include "protocol.h"
 #include "sql_class.h"                          // THD
 #include <stdarg.h>
+#include <mysql.h>
 
 static const unsigned int PACKET_BUFFER_EXTRA_ALLOC= 1024;
 /* Declared non-static only because of the embedded library. */
@@ -167,7 +168,7 @@ bool net_send_error(THD *thd, uint sql_errno, const char *err,
   thd->get_stmt_da()->set_overwrite_status(true);
 
   /* Abort multi-result sets */
-  thd->server_status&= ~SERVER_MORE_RESULTS_EXISTS;
+  thd->server_status&= ~SERVER_MORE_RESULTS_EXIST;
 
   error= net_send_error_packet(thd, sql_errno, err, sqlstate);
 

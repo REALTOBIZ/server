@@ -47,6 +47,7 @@
 #include "lock.h"                               // MYSQL_LOCK_IGNORE_TIMEOUT
 #include <sql_common.h>
 #include <mysql/plugin_auth.h>
+#include <mysql/plugin_auth_common.h>
 #include <mysql/plugin_password_validation.h>
 #include "sql_connect.h"
 #include "hostname.h"

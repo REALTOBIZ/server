@@ -162,7 +162,6 @@ IF(DISABLE_SHARED)
 ENDIF()
 OPTION(ENABLED_PROFILING "Enable profiling" ON)
 OPTION(WITHOUT_SERVER "Build only the client library and clients" OFF)
-OPTION(WITH_LIBMARIADB "Build client library and clients with MariaDB Connector/C" ON)
 IF(UNIX)
   OPTION(WITH_VALGRIND "Valgrind instrumentation" OFF)
 ENDIF()
@@ -336,6 +335,12 @@ ENDIF()
 # given by the invoking user are honored
 #
 INCLUDE(maintainer)
+ADD_SUBDIRECTORY(libmariadb)
+
+INCLUDE_DIRECTORIES(
+  BEFORE
+${CONNECTOR_C_INSTALLDIR}/include/mariadb)
+
 
 IF(WITH_UNIT_TESTS)
  ENABLE_TESTING()
@@ -359,9 +364,6 @@ ADD_SUBDIRECTORY(strings)
 ADD_SUBDIRECTORY(vio)
 ADD_SUBDIRECTORY(mysys)
 ADD_SUBDIRECTORY(mysys_ssl)
-IF(WITH_LIBMARIADB)
-ADD_SUBDIRECTORY(libmariadb)
-ENDIF()
 ADD_SUBDIRECTORY(libmysql)
 ADD_SUBDIRECTORY(client)
 ADD_SUBDIRECTORY(extra)

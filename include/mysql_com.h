@@ -17,7 +17,7 @@
 /*
 ** Common definition between mysql server & client
 */
-
+#if 0
 #ifndef _mysql_com_h
 #define _mysql_com_h
 
@@ -506,14 +506,6 @@ enum mysql_enum_shutdown_level {
   SHUTDOWN_WAIT_CRITICAL_BUFFERS= (MYSQL_SHUTDOWN_KILLABLE_UPDATE << 1) + 1
 };
 
-enum enum_cursor_type
-{
-  CURSOR_TYPE_NO_CURSOR= 0,
-  CURSOR_TYPE_READ_ONLY= 1,
-  CURSOR_TYPE_FOR_UPDATE= 2,
-  CURSOR_TYPE_SCROLLABLE= 4
-};
-
 
 /* options for mysql_set_option */
 enum enum_mysql_set_option
@@ -657,4 +649,5 @@ uchar *safe_net_store_length(uchar *pkg, size_t pkg_len, ulonglong length);
 */
 
 
+#endif
 #endif

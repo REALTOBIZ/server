@@ -27,7 +27,9 @@
 #include "sql_const.h"                 /* RAND_TABLE_BIT, MAX_FIELD_NAME */
 #include "field.h"                              /* Derivation */
 #include "sql_type.h"
-
+#ifdef MYSQL_CLIENT
+#error foo
+#endif
 C_MODE_START
 #include <ma_dyncol.h>
 C_MODE_END

@@ -20,8 +20,9 @@ MY_ADD_TESTS(my_vsnprintf LINK_LIBRARIES strings mysys)
 
 ADD_DEFINITIONS(${SSL_DEFINES})
 
-MY_ADD_TESTS(ma_dyncol
-	     LINK_LIBRARIES mysqlclient)
+ADD_EXECUTABLE(ma_dyncol-t ma_dyncol-t.c ../../sql-common/my_time.c)
+TARGET_LINK_LIBRARIES(ma_dyncol-t mytap mysys)
+ADD_TEST(ma_dyncol ma_dyncol-t)
 
 IF(WIN32)
   MY_ADD_TESTS(my_delete LINK_LIBRARIES mysys)

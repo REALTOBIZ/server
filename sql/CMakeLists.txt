@@ -45,6 +45,8 @@ ${CMAKE_BINARY_DIR}/sql
 ${WSREP_INCLUDES}
 )
 
+
+
 SET(GEN_SOURCES
 ${CMAKE_CURRENT_BINARY_DIR}/sql_yacc.h 
 ${CMAKE_CURRENT_BINARY_DIR}/sql_yacc.cc
@@ -78,8 +80,14 @@ IF(SSL_DEFINES)
 ENDIF()
 
 SET (SQL_SOURCE
-              ../sql-common/client.c compat56.cc derror.cc des_key_file.cc
-               discover.cc ../libmysql/errmsg.c field.cc  field_conv.cc 
+              #../sql-common/client.c 
+			  # ../sql-common/client_plugin.c
+			  # ../libmysql/errmsg.c
+			  ../sql-common/pack.c 
+			  ../sql-common/my_time.c
+			  ../sql-common/my_user.c 
+			  compat56.cc derror.cc des_key_file.cc
+               discover.cc  field.cc  field_conv.cc 
                filesort_utils.cc
                filesort.cc gstream.cc sha2.cc
                signal_handler.cc
@@ -90,11 +98,11 @@ SET (SQL_SOURCE
                key.cc log.cc lock.cc
                log_event.cc rpl_record.cc rpl_reporting.cc
                log_event_old.cc rpl_record_old.cc
-               message.h mf_iocache.cc my_decimal.cc ../sql-common/my_time.c
+               message.h mf_iocache.cc my_decimal.cc
                mysqld.cc net_serv.cc  keycaches.cc
-               ../sql-common/client_plugin.c
+              
                opt_range.cc opt_range.h opt_sum.cc 
-               ../sql-common/pack.c parse_file.cc password.c procedure.cc 
+               parse_file.cc password.c procedure.cc 
                protocol.cc records.cc repl_failsafe.cc rpl_filter.cc set_var.cc 
                slave.cc sp.cc sp_cache.cc sp_head.cc sp_pcontext.cc 
                sp_rcontext.cc spatial.cc sql_acl.cc sql_analyse.cc sql_base.cc 
@@ -116,7 +124,7 @@ SET (SQL_SOURCE
                uniques.cc uniques.h
                rpl_tblmap.cc sql_binlog.cc event_scheduler.cc event_data_objects.cc
                event_queue.cc event_db_repository.cc 
-               sql_tablespace.cc events.cc ../sql-common/my_user.c 
+               sql_tablespace.cc events.cc 
                partition_info.cc rpl_utility.cc rpl_injector.cc sql_locale.cc
                rpl_rli.cc rpl_mi.cc sql_servers.cc sql_audit.cc
                sql_connect.cc scheduler.cc sql_partition_admin.cc
@@ -133,7 +141,7 @@ SET (SQL_SOURCE
                opt_index_cond_pushdown.cc opt_subselect.cc
                opt_table_elimination.cc sql_expression_cache.cc
                gcalc_slicescan.cc gcalc_tools.cc
-               threadpool_common.cc ../sql-common/mysql_async.c
+               threadpool_common.cc 
                my_apc.cc my_apc.h mf_iocache_encr.cc
                my_json_writer.cc my_json_writer.h
                rpl_gtid.cc rpl_parallel.cc
@@ -168,7 +176,7 @@ ADD_DEPENDENCIES(sql GenServerSource)
 ADD_DEPENDENCIES(sql GenDigestServerSource)
 DTRACE_INSTRUMENT(sql)
 TARGET_LINK_LIBRARIES(sql ${MYSQLD_STATIC_PLUGIN_LIBS} 
-  mysys mysys_ssl dbug strings vio pcre ${LIBJEMALLOC}
+  mysys mysys_ssl dbug strings vio pcre mariadbclient ${LIBJEMALLOC}
   ${LIBWRAP} ${LIBCRYPT} ${LIBDL} ${CMAKE_THREAD_LIBS_INIT}
   ${WSREP_LIB}
   ${SSL_LIBRARIES}
@@ -205,7 +213,7 @@ IF(NOT WITHOUT_DYNAMIC_PLUGINS)
     # incremental appears to crash from time to time,if used with /DEF option
     SET_TARGET_PROPERTIES(mysqld PROPERTIES LINK_FLAGS "${mysqld_link_flags} /DEF:mysqld.def /INCREMENTAL:NO")
 
-    FOREACH (CORELIB sql mysys mysys_ssl dbug strings)
+    FOREACH (CORELIB sql mysys mysys_ssl dbug strings mariadbclient)
       GET_TARGET_PROPERTY(LOC ${CORELIB} LOCATION)
       FILE(TO_NATIVE_PATH ${LOC} LOC)
       SET (LIB_LOCATIONS ${LIB_LOCATIONS} ${LOC}) 

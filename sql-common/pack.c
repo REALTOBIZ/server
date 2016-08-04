@@ -15,11 +15,10 @@
    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA */
 
 #include <my_global.h>
-#include <mysql_com.h>
 #include <mysql.h>
 
 /* Get the length of next field. Change parameter to point at fieldstart */
-ulong STDCALL net_field_length(uchar **packet)
+ulong STDCALL my_net_field_length(uchar **packet)
 {
   reg1 uchar *pos= (uchar *)*packet;
   if (*pos < 251)

@@ -1624,7 +1624,7 @@ int spider_db_mysql::ping(
   DBUG_PRINT("info",("spider this=%p", this));
   if (spider_param_dry_access())
     DBUG_RETURN(0);
-  DBUG_RETURN(simple_command(db_conn, COM_PING, 0, 0, 0));
+  DBUG_RETURN(mysql_ping(db_conn));
 }
 
 void spider_db_mysql::bg_disconnect()
@@ -1652,8 +1652,8 @@ int spider_db_mysql::set_net_timeout()
   DBUG_ENTER("spider_db_mysql::set_net_timeout");
   DBUG_PRINT("info",("spider this=%p", this));
   DBUG_PRINT("info",("spider conn=%p", conn));
-  my_net_set_read_timeout(&db_conn->net, conn->net_read_timeout);
-  my_net_set_write_timeout(&db_conn->net, conn->net_write_timeout);
+  mysql_options(db_conn, MYSQL_OPT_READ_TIMEOUT, &conn->net_read_timeout);
+  mysql_options(db_conn, MYSQL_OPT_READ_TIMEOUT, &conn->net_write_timeout);
   DBUG_RETURN(0);
 }
 
@@ -1946,7 +1946,7 @@ spider_db_result *spider_db_mysql::use_result(
     *error_num = 0;
     if (
       spider_param_dry_access() ||
-      !(result->db_result = db_conn->methods->use_result(db_conn))
+      !(result->db_result = mysql_use_result(db_conn))
     ) {
       delete result;
       result = NULL;
@@ -1981,7 +1981,7 @@ int spider_db_mysql::next_result()
   if (db_conn->server_status & SERVER_MORE_RESULTS_EXISTS)
 #endif
   {
-    if ((status = db_conn->methods->read_query_result(db_conn)) > 0)
+    if ((status =mysql_read_query_result(db_conn)) > 0)
       DBUG_RETURN(spider_db_errorno(conn));
     DBUG_RETURN(status);
   }
@@ -2533,12 +2533,15 @@ size_t spider_db_mysql::escape_string(
   const char *from,
   size_t from_length
 ) {
+
   DBUG_ENTER("spider_db_mysql::escape_string");
   DBUG_PRINT("info",("spider this=%p", this));
+  MY_CHARSET_LOADER loader;
+  CHARSET_INFO *csinfo=my_charset_get_by_name(&loader, db_conn->charset->csname, 0, 0);
   if (db_conn->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES)
-    DBUG_RETURN(escape_quotes_for_mysql(db_conn->charset, to, 0,
+    DBUG_RETURN(escape_quotes_for_mysql(csinfo, to, 0,
       from, from_length));
-  DBUG_RETURN(escape_string_for_mysql(db_conn->charset, to, 0,
+  DBUG_RETURN(escape_string_for_mysql(csinfo, to, 0,
     from, from_length));
 }
 

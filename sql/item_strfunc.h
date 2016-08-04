@@ -1,6 +1,6 @@
 #ifndef ITEM_STRFUNC_INCLUDED
 #define ITEM_STRFUNC_INCLUDED
-
+#include <mysql.h>
 /*
    Copyright (c) 2000, 2011, Oracle and/or its affiliates.
    Copyright (c) 2009, 2015, MariaDB

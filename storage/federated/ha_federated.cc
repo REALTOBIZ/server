@@ -3186,8 +3186,8 @@ int ha_federated::real_connect()
     API silently reconnect. For future versions, we will need more logic to
     deal with transactions
   */
-
-  mysql->reconnect= 1;
+  my_bool reconnect=1;
+  mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
   DBUG_RETURN(0);
 }
 

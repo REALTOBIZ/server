@@ -94,7 +94,6 @@ static MYSQL_RES *connect_use_result(MYSQL *mysql)
     DBUG_RETURN(NULL);
 
   result->lengths = (ulong*)(result+1);
-  result->methods = mysql->methods;
 
   /* Ptrs: to one row */
   if (!(result->row = (MYSQL_ROW)my_malloc(sizeof(result->row[0]) *
@@ -112,7 +111,7 @@ static MYSQL_RES *connect_use_result(MYSQL *mysql)
   mysql->fields = 0;			/* fields is now in result */
   clear_alloc_root(&mysql->field_alloc);
   mysql->status = MYSQL_STATUS_USE_RESULT;
-  mysql->unbuffered_fetch_owner = &result->unbuffered_fetch_cancelled;
+  
   DBUG_RETURN(result);			/* Data is ready to be fetched */
 } // end of connect_use_result
 #endif   // !MYSQL_PREPARED_STATEMENTS

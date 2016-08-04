@@ -2241,7 +2241,6 @@ void clean_up(bool print_message)
   MYSQL_CALLBACK(thread_scheduler, end, ());
   thread_scheduler= 0;
   mysql_library_end();
-  finish_client_errs();
   cleanup_errmsgs();
   free_error_messages();
   /* Tell main we are ready */
@@ -4516,7 +4515,6 @@ static int init_common_variables()
     return 1;
   global_system_variables.lc_messages= my_default_lc_messages;
   global_system_variables.errmsgs= my_default_lc_messages->errmsgs->errmsgs;
-  init_client_errs();
   mysql_library_init(unused,unused,unused); /* for replication */
   lex_init();
   if (item_create_init())

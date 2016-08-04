@@ -23,12 +23,12 @@
 #include "mdl.h"
 #include "datadict.h"
 #include "sql_string.h"                         /* String */
-
+#include <mysql.h>
 #ifndef MYSQL_CLIENT
 
 #include "hash.h"                               /* HASH */
 #include "handler.h"                /* row_type, ha_choice, handler */
-#include "mysql_com.h"              /* enum_field_types */
+#include "mysql.h"              /* enum_field_types */
 #include "thr_lock.h"                  /* thr_lock_type */
 #include "filesort_utils.h"
 #include "parse_file.h"

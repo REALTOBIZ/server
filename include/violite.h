@@ -31,9 +31,9 @@
 extern "C" {
 #endif /* __cplusplus */
 
-#ifdef __cplusplus
+//#ifdef __cplusplus
 typedef struct st_vio Vio;
-#endif /* __cplusplus */
+//#endif /* __cplusplus */
 
 enum enum_vio_type
 {

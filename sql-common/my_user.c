@@ -16,7 +16,7 @@
 
 #include <my_user.h>
 #include <m_string.h>
-#include <mysql_com.h>
+#include <mysql.h>
 
 /*
   Parse user value to user name and host name parts.

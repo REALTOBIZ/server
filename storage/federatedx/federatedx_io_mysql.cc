@@ -162,7 +162,8 @@ void federatedx_io_mysql::reset()
   set_active(FALSE);
   
   requested_autocommit= TRUE;
-  mysql.reconnect= 1;
+  my_bool my_true=1;
+  mysql_options(&mysql, MYSQL_OPT_RECONNECT, &my_true);
 }
 
 
@@ -245,7 +246,8 @@ int federatedx_io_mysql::savepoint_set(ulong sp)
     goto err;
 
   set_active(TRUE);
-  mysql.reconnect= 0;
+  my_bool reconnect=0;
+  mysql_options(&mysql, MYSQL_OPT_RECONNECT, &reconnect);
   requested_autocommit= FALSE;
 
 err:
@@ -391,7 +393,8 @@ int federatedx_io_mysql::query(const char *buffer, uint length)
     if ((error= actual_query(wants_autocommit ? "SET AUTOCOMMIT=1"
                                             : "SET AUTOCOMMIT=0", 16)))
     DBUG_RETURN(error);                         
-    mysql.reconnect= wants_autocommit ? 1 : 0;
+    my_bool reconnect= wants_autocommit ? 1 : 0;
+    mysql_options(&mysql, MYSQL_OPT_RECONNECT, &reconnect);
     actual_autocommit= wants_autocommit;
   }
   
@@ -424,7 +427,7 @@ int federatedx_io_mysql::actual_query(const char *buffer, uint length)
   int error;
   DBUG_ENTER("federatedx_io_mysql::actual_query");
 
-  if (!mysql.net.vio)
+  if (!mysql.net.pvio)
   {
     my_bool my_true= 1;
 
@@ -449,7 +452,9 @@ int federatedx_io_mysql::actual_query(const char *buffer, uint length)
                             get_port(),
                             get_socket(), 0))
       DBUG_RETURN(ER_CONNECT_TO_FOREIGN_DATA_SOURCE);
-    mysql.reconnect= 1;
+    mysql_options(&mysql, MYSQL_OPT_RECONNECT,
+      (char*)&my_true);
+
   }
 
   error= mysql_real_query(&mysql, buffer, length);

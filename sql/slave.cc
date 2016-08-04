@@ -45,6 +45,9 @@
 #include "rpl_handler.h"
 #include <signal.h>
 #include <mysql.h>
+#ifdef MYSQL_CLIENT
+#error xxxx
+#endif
 #include <myisam.h>
 
 #include "sql_base.h"                           // close_thread_tables
@@ -1131,6 +1134,19 @@ static bool sql_slave_killed(rpl_group_info *rgi)
   DBUG_RETURN(ret);
 }
 
+static bool ma_net_request_file(MA_NET* net, const char* fname)
+{
+  DBUG_ENTER("ma_net_request_file");
+  DBUG_RETURN(ma_net_write_command(net, 251, fname, strlen(fname)));
+}
+
+
+bool net_request_file(NET* net, const char* fname)
+{
+  DBUG_ENTER("net_request_file");
+  DBUG_RETURN(net_write_command(net, 251, (uchar*)fname, strlen(fname),
+    (uchar*) "", 0));
+}
 
 /*
   skip_load_data_infile()
@@ -1138,6 +1154,16 @@ static bool sql_slave_killed(rpl_group_info *rgi)
   NOTES
     This is used to tell a 3.23 master to break send_file()
 */
+
+void skip_load_data_infile(MA_NET *net)
+{
+  DBUG_ENTER("skip_load_data_infile");
+
+  (void)ma_net_request_file(net, "/dev/null");
+  (void)ma_net_read(net);                               // discard response
+  (void)ma_net_write_command(net, 0, "", 0); // ok
+  DBUG_VOID_RETURN;
+}
 
 void skip_load_data_infile(NET *net)
 {
@@ -1149,13 +1175,6 @@ void skip_load_data_infile(NET *net)
   DBUG_VOID_RETURN;
 }
 
-
-bool net_request_file(NET* net, const char* fname)
-{
-  DBUG_ENTER("net_request_file");
-  DBUG_RETURN(net_write_command(net, 251, (uchar*) fname, strlen(fname),
-                                (uchar*) "", 0));
-}
 
 /*
   From other comments and tests in code, it looks like
@@ -2454,7 +2473,7 @@ int register_slave_on_master(MYSQL* mysql, Master_info *mi,
   /* The master will fill in master_id */
   int4store(pos, 0);                    pos+= 4;
 
-  if (simple_command(mysql, COM_REGISTER_SLAVE, buf, (size_t) (pos- buf), 0))
+  if (ma_simple_command(mysql, COM_REGISTER_SLAVE, (const char *)buf, (size_t) (pos- buf), 0, 0))
   {
     if (mysql_errno(mysql) == ER_NET_READ_INTERRUPTED)
     {
@@ -3144,7 +3163,7 @@ static int request_dump(THD *thd, MYSQL* mysql, Master_info* mi,
   int4store(buf + 6, global_system_variables.server_id);
   len = (uint) strlen(logname);
   memcpy(buf + 10, logname,len);
-  if (simple_command(mysql, COM_BINLOG_DUMP, buf, len + 10, 1))
+  if (ma_simple_command(mysql, COM_BINLOG_DUMP, (const char *)buf, len + 10, 1, 0))
   {
     /*
       Something went wrong, so we will just reconnect and retry later
@@ -3196,7 +3215,7 @@ static ulong read_event(MYSQL* mysql, Master_info *mi, bool* suppress_warnings)
     DBUG_RETURN(packet_error);
 #endif
 
-  len = cli_safe_read(mysql);
+  len = ma_net_safe_read(mysql);
   if (len == packet_error || (long) len < 1)
   {
     if (mysql_errno(mysql) == ER_NET_READ_INTERRUPTED)
@@ -3853,7 +3872,7 @@ static int try_to_reconnect(THD *thd, MYSQL *mysql, Master_info *mi,
   mi->slave_running= MYSQL_SLAVE_RUN_NOT_CONNECT;
   thd->proc_info= messages[SLAVE_RECON_MSG_WAIT];
   thd->clear_active_mysql();
-  end_server(mysql);
+
   if ((*retry_count)++)
   {
     if (*retry_count > master_retry_count)
@@ -4062,7 +4081,6 @@ connected:
 
   // TODO: the assignment below should be under mutex (5.0)
   mi->slave_running= MYSQL_SLAVE_RUN_CONNECT;
-  thd->slave_net = &mysql->net;
   THD_STAGE_INFO(thd, stage_checking_master_version);
   ret= get_master_version_and_clock(mysql, mi);
   if (ret == 1)
@@ -4976,7 +4994,7 @@ static int process_io_create_file(Master_info* mi, Create_file_log_event* cev)
   ulong num_bytes;
   bool cev_not_written;
   THD *thd = mi->io_thd;
-  NET *net = &mi->mysql->net;
+  MA_NET *net = &mi->mysql->net;
   DBUG_ENTER("process_io_create_file");
 
   if (unlikely(!cev->is_valid()))
@@ -4992,7 +5010,7 @@ static int process_io_create_file(Master_info* mi, Create_file_log_event* cev)
   thd->variables.server_id = cev->server_id;
   cev_not_written = 1;
 
-  if (unlikely(net_request_file(net,cev->fname)))
+  if (unlikely(ma_net_request_file(net,cev->fname)))
   {
     sql_print_error("Slave I/O: failed requesting download of '%s'",
                     cev->fname);
@@ -5009,7 +5027,7 @@ static int process_io_create_file(Master_info* mi, Create_file_log_event* cev)
 
     for (;;)
     {
-      if (unlikely((num_bytes=my_net_read(net)) == packet_error))
+      if (unlikely((num_bytes=ma_net_read(net)) == packet_error))
       {
         sql_print_error("Network read error downloading '%s' from master",
                         cev->fname);
@@ -5018,7 +5036,7 @@ static int process_io_create_file(Master_info* mi, Create_file_log_event* cev)
       if (unlikely(!num_bytes)) /* eof */
       {
 	/* 3.23 master wants it */
-        net_write_command(net, 0, (uchar*) "", 0, (uchar*) "", 0);
+        ma_net_write_command(net, 0, "", 0);
         /*
           If we wrote Create_file_log_event, then we need to write
           Execute_load_log_event. If we did not write Create_file_log_event,
@@ -6239,9 +6257,8 @@ static int connect_to_master(THD* thd, MYSQL* mysql, Master_info* mi,
                           "'%s' will be used as default client character set "
                           "while connecting to master.",
                           default_charset_info->csname,
-                          default_client_charset_info->csname);
-    mysql_options(mysql, MYSQL_SET_CHARSET_NAME,
-                  default_client_charset_info->csname);
+                          "latin1");
+    mysql_options(mysql, MYSQL_SET_CHARSET_NAME, "latin1");
   }
 
   /* This one is not strictly needed but we have it here for completeness */
@@ -6262,7 +6279,7 @@ static int connect_to_master(THD* thd, MYSQL* mysql, Master_info* mi,
     DBUG_RETURN(1);
   }
   while (!(slave_was_killed = io_slave_killed(mi)) &&
-         (reconnect ? mysql_reconnect(mysql) != 0 :
+         (reconnect ? mariadb_reconnect(mysql) != 0 :
           mysql_real_connect(mysql, mi->host, mi->user, mi->password, 0,
                              mi->port, 0, client_flag) == 0))
   {
@@ -6314,7 +6331,7 @@ static int connect_to_master(THD* thd, MYSQL* mysql, Master_info* mi,
     }
     thd->set_active_mysql(mysql);
   }
-  mysql->reconnect= 1;
+  mysql_options(mysql, MYSQL_OPT_RECONNECT, &my_true);
   DBUG_PRINT("exit",("slave_was_killed: %d", slave_was_killed));
   DBUG_RETURN(slave_was_killed);
 }

@@ -41,7 +41,7 @@ Created 5/11/1994 Heikki Tuuri
 #ifndef UNIV_HOTBACKUP
 # include "trx0trx.h"
 # include "ha_prototypes.h"
-# include "mysql_com.h" /* NAME_LEN */
+# include "mysql.h" /* NAME_LEN */
 # include <string>
 #endif /* UNIV_HOTBACKUP */
 

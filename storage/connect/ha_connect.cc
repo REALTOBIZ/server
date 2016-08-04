@@ -110,7 +110,7 @@
 #define DONT_DEFINE_VOID
 #include "sql_class.h"
 #include "create_options.h"
-#include "mysql_com.h"
+#include "mysql.h"
 #include "field.h"
 #include "sql_parse.h"
 #include "sql_base.h"

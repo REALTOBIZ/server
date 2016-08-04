@@ -21,7 +21,7 @@
 
 #define DONT_MAP_VIO
 #include <my_global.h>
-#include <mysql_com.h>
+#include <mysql.h>
 #include <my_sys.h>
 #include <m_string.h>
 #include <violite.h>

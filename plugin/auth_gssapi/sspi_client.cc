@@ -36,6 +36,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <mysql/plugin_auth.h>
 #include <mysql.h>
 #include <mysqld_error.h>
+#include <stdlib.h>
 
 #include "sspi.h"
 

@@ -37,5 +37,5 @@ struct st_net_server
 };
 
 typedef struct st_net_server NET_SERVER;
-
+extern "C" void my_net_local_init(NET *net);
 #endif

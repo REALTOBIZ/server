@@ -23,15 +23,7 @@
   Error messages for the mysqld daemon are in sql/share/errmsg.txt
 */
 
-#ifdef	__cplusplus
-extern "C" {
-#endif
-void	init_client_errs(void);
-void	finish_client_errs(void);
-extern const char *client_errors[];	/* Error messages */
-#ifdef	__cplusplus
-}
-#endif
+
 
 #define CR_MIN_ERROR		2000	/* For easier client code */
 #define CR_MAX_ERROR		2999

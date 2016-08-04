@@ -25,8 +25,6 @@
 
 #define MYSQL_PLUGIN_AUTH_INCLUDED
 
-#include <mysql/plugin.h>
-
 #define MYSQL_AUTHENTICATION_INTERFACE_VERSION 0x0200
 
 #include <mysql/plugin_auth_common.h>

@@ -54,12 +54,7 @@
 
 #include <algorithm>
 
-#ifdef LIBMARIADB
-#define my_net_write ma_net_write
-#define net_flush ma_net_flush
-#define net_safe_read ma_net_safe_read
-#define my_net_read ma_net_read
-#endif
+
 
 Rpl_filter *binlog_filter= 0;
 
@@ -98,7 +93,6 @@ static void error(const char *format, ...) ATTRIBUTE_FORMAT(printf, 1, 2);
 static void warning(const char *format, ...) ATTRIBUTE_FORMAT(printf, 1, 2);
 
 #ifdef HAVE_LIBMARIADB
-extern "C" ulong my_net_read(NET *net);
 extern "C" unsigned char *mysql_net_store_length(unsigned char *packet, size_t length);
 #define net_store_length mysql_net_store_length
 #endif
@@ -396,7 +390,7 @@ public:
   Exit_status process(Begin_load_query_log_event *ce);
   Exit_status process(Append_block_log_event *ae);
   File prepare_new_file_for_old_format(Load_log_event *le, char *filename);
-  Exit_status load_old_format_file(NET* net, const char *server_fname,
+  Exit_status load_old_format_file(MA_NET* net, const char *server_fname,
                                    uint server_fname_len, File file);
   Exit_status process_first_event(const char *bname, size_t blen,
                                   const uchar *block,
@@ -453,7 +447,7 @@ File Load_log_processor::prepare_new_file_for_old_format(Load_log_event *le,
   @retval ERROR_STOP An error occurred - the program should terminate.
   @retval OK_CONTINUE No error, the program should continue.
 */
-Exit_status Load_log_processor::load_old_format_file(NET* net,
+Exit_status Load_log_processor::load_old_format_file(MA_NET* net,
                                                      const char*server_fname,
                                                      uint server_fname_len,
                                                      File file)
@@ -461,7 +455,7 @@ Exit_status Load_log_processor::load_old_format_file(NET* net,
   uchar buf[FN_REFLEN+1];
   buf[0] = 0;
   memcpy(buf + 1, server_fname, server_fname_len + 1);
-  if (my_net_write(net, buf, server_fname_len +2) || net_flush(net))
+  if (ma_net_write(net, buf, server_fname_len +2) || ma_net_flush(net))
   {
     error("Failed requesting the remote dump of %s.", server_fname);
     return ERROR_STOP;
@@ -469,10 +463,10 @@ Exit_status Load_log_processor::load_old_format_file(NET* net,
   
   for (;;)
   {
-    ulong packet_len = my_net_read(net);
+    ulong packet_len = ma_net_read(net);
     if (packet_len == 0)
     {
-      if (my_net_write(net, (uchar*) "", 0) || net_flush(net))
+      if (ma_net_write(net, (uchar*) "", 0) || ma_net_flush(net))
       {
         error("Failed sending the ack packet.");
         return ERROR_STOP;
@@ -1965,7 +1959,7 @@ static Exit_status handle_event_text_mode(PRINT_EVENT_INFO *print_event_info,
 {
   const char *error_msg;
   Log_event *ev;
-  NET *net= &mysql->net;
+  MA_NET *net= &mysql->net;
   DBUG_ENTER("handle_event_text_mode");
 
   if (net->read_pos[5] == ANNOTATE_ROWS_EVENT)
@@ -2219,7 +2213,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
   uchar buf[128];
   ulong len;
   uint logname_len;
-  NET* net;
+  MA_NET* net;
   my_off_t old_off= start_position_mot;
   Exit_status retval= OK_CONTINUE;
   short binlog_flags = 0; 
@@ -2280,11 +2274,7 @@ static Exit_status dump_remote_log_entries(PRINT_EVENT_INFO *print_event_info,
 
   for (;;)
   {
-#ifndef HAVE_LIBMARIADB
-    len= cli_safe_read(mysql);
-#else
-    len= net_safe_read(mysql);
-#endif
+    len= ma_net_safe_read(mysql);
     if (len == packet_error)
     {
       error("Got error reading packet from server: %s", mysql_error(mysql));

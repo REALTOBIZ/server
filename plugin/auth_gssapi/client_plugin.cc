@@ -33,6 +33,7 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 #include <string.h>
 #include <stdarg.h>
+#include <mysql.h>
 #include <mysqld_error.h>
 #include <mysql/client_plugin.h>
 #include <mysql.h>
@@ -65,15 +66,13 @@ static void parse_server_packet(char *packet, size_t packet_len, char *spn, char
  */
 void log_client_error(MYSQL *mysql,  const char *format, ...)
 {
-  NET *net= &mysql->net;
   va_list args;
-
-  net->last_errno= ER_UNKNOWN_ERROR;
+  mysql->net.last_errno= ER_UNKNOWN_ERROR;
   va_start(args, format);
-  vsnprintf(net->last_error, sizeof(net->last_error) - 1,
+  vsnprintf(mysql->net.last_error, sizeof(mysql->net.last_error) - 1,
           format, args);
   va_end(args);
-  memcpy(net->sqlstate, "HY000", sizeof(net->sqlstate));
+  memcpy(mysql->net.sqlstate, "HY000", sizeof(mysql->net.sqlstate));
 }
 
 /**

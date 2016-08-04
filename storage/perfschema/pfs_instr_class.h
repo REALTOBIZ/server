@@ -17,7 +17,7 @@
 #define PFS_INSTR_CLASS_H
 
 #include "my_global.h"
-#include "mysql_com.h"                          /* NAME_LEN */
+#include "mysql.h"                          /* NAME_LEN */
 #include "lf.h"
 #include "pfs_global.h"
 

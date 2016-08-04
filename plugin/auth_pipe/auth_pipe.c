@@ -22,7 +22,7 @@
   Authentication is successful if the connection is done via a named pipe 
   pipe peer name matches mysql user name
 */
-
+#include <mysql/plugin.h>
 #include <mysql/plugin_auth.h>
 #include <string.h>
 #include <lmcons.h>

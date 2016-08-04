@@ -1907,7 +1907,7 @@ void THD::awake(killed_state state_to_set)
     {
 #ifndef EMBEDDED_LIBRARY
       if (active_mysql)
-        mysql_cancel(active_mysql);
+        mariadb_cancel(active_mysql);
       else
 #endif
       if(net.vio)

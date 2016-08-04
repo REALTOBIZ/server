@@ -100,7 +100,7 @@ int ReplSemiSyncSlave::slaveReply(MYSQL *mysql,
                                  my_off_t binlog_filepos)
 {
   const char *kWho = "ReplSemiSyncSlave::slaveReply";
-  NET *net= &mysql->net;
+  MA_NET *net= &mysql->net;
   uchar reply_buffer[REPLY_MAGIC_NUM_LEN
                      + REPLY_BINLOG_POS_LEN
                      + REPLY_BINLOG_NAME_LEN];
@@ -119,13 +119,13 @@ int ReplSemiSyncSlave::slaveReply(MYSQL *mysql,
     sql_print_information("%s: reply (%s, %lu)", kWho,
                           binlog_filename, (ulong)binlog_filepos);
 
-  net_clear(net, 0);
+  ma_net_clear(net);
   /* Send the reply. */
-  reply_res = my_net_write(net, reply_buffer,
+  reply_res = ma_net_write(net, reply_buffer,
                            name_len + REPLY_BINLOG_NAME_OFFSET);
   if (!reply_res)
   {
-    reply_res = net_flush(net);
+    reply_res = ma_net_flush(net);
     if (reply_res)
       sql_print_error("Semi-sync slave net_flush() reply failed");
   }
