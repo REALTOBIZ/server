@@ -2077,22 +2077,15 @@ public:
     return m_tok_start;
   }
 
-  /** Get the token start position, in the pre-processed buffer. */
-  const char *get_cpp_tok_start()
+  void set_cpp_tok_start(const char *pos)
   {
-    return m_cpp_tok_start;
+    m_cpp_tok_start= pos;
   }
 
   /** Get the token end position, in the raw buffer. */
   const char *get_tok_end()
   {
     return m_tok_end;
-  }
-
-  /** Get the token end position, in the pre-processed buffer. */
-  const char *get_cpp_tok_end()
-  {
-    return m_cpp_tok_end;
   }
 
   /** Get the previous token start position, in the raw buffer. */
@@ -2107,12 +2100,6 @@ public:
     return m_ptr;
   }
 
-  /** Get the current stream pointer, in the pre-processed buffer. */
-  const char *get_cpp_ptr()
-  {
-    return m_cpp_ptr;
-  }
-
   /** Get the length of the current token, in the raw buffer. */
   uint yyLength()
   {
@@ -2122,6 +2109,30 @@ public:
     */
     DBUG_ASSERT(m_ptr > m_tok_start);
     return (uint) ((m_ptr - m_tok_start) - 1);
+  }
+
+  /** Get the previus token start position, in the pre-processed buffer. */
+  const char *get_cpp_start_prev()
+  {
+    return m_cpp_tok_start_prev;
+  }
+
+  /** Get the token start position, in the pre-processed buffer. */
+  const char *get_cpp_tok_start()
+  {
+    return m_cpp_tok_start;
+  }
+
+  /** Get the token end position, in the pre-processed buffer. */
+  const char *get_cpp_tok_end()
+  {
+    return m_cpp_tok_end;
+  }
+
+  /** Get the current stream pointer, in the pre-processed buffer. */
+  const char *get_cpp_ptr()
+  {
+    return m_cpp_ptr;
   }
 
   /** Get the utf8-body string. */
@@ -2971,6 +2982,13 @@ public:
        !(last_key= new Key(key_type, key_name, algorithm, false, ddl)))
       return true;
     alter_info.key_list.push_back(last_key);
+    return false;
+  }
+  // Add a constraint as a part of CREATE TABLE or ALTER TABLE
+  bool add_constraint(LEX_STRING *name, Virtual_column_info *constr)
+  {
+    constr->name= *name;
+    alter_info.check_constraint_list.push_back(constr);
     return false;
   }
   void set_command(enum_sql_command command,

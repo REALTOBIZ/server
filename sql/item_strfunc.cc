@@ -54,7 +54,6 @@
 #include <base64.h>
 #include <my_md5.h>
 #include "sha1.h"
-#include <zlib.h>
 C_MODE_START
 #include "../mysys/my_static.h"			// For soundex_map
 C_MODE_END
@@ -814,9 +813,10 @@ String *Item_func_des_encrypt::val_str(String *str)
 
     /* We make good 24-byte (168 bit) key from given plaintext key with MD5 */
     bzero((char*) &ivec,sizeof(ivec));
-    EVP_BytesToKey(EVP_des_ede3_cbc(),EVP_md5(),NULL,
+    if (!EVP_BytesToKey(EVP_des_ede3_cbc(),EVP_md5(),NULL,
 		   (uchar*) keystr->ptr(), (int) keystr->length(),
-		   1, (uchar*) &keyblock,ivec);
+		   1, (uchar*) &keyblock,ivec))
+      goto error;
     DES_set_key_unchecked(&keyblock.key1,&keyschedule.ks1);
     DES_set_key_unchecked(&keyblock.key2,&keyschedule.ks2);
     DES_set_key_unchecked(&keyblock.key3,&keyschedule.ks3);
@@ -909,9 +909,10 @@ String *Item_func_des_decrypt::val_str(String *str)
       goto error;
 
     bzero((char*) &ivec,sizeof(ivec));
-    EVP_BytesToKey(EVP_des_ede3_cbc(),EVP_md5(),NULL,
+    if (!EVP_BytesToKey(EVP_des_ede3_cbc(),EVP_md5(),NULL,
 		   (uchar*) keystr->ptr(),(int) keystr->length(),
-		   1,(uchar*) &keyblock,ivec);
+		   1,(uchar*) &keyblock,ivec))
+      goto error;
     // Here we set all 64-bit keys (56 effective) one by one
     DES_set_key_unchecked(&keyblock.key1,&keyschedule.ks1);
     DES_set_key_unchecked(&keyblock.key2,&keyschedule.ks2);
@@ -2342,6 +2343,18 @@ void Item_func_decode::crypto_transform(String *res)
   sql_crypt.decode((char*) res->ptr(),res->length());
 }
 
+Item *Item_func_sysconst::safe_charset_converter(THD *thd,
+                                                 CHARSET_INFO *tocs)
+{
+  /*
+    In default, virtual functions or constraint expressions, the value
+    of a sysconst is not constant
+  */
+  if (thd->in_stored_expression)
+    return Item_str_func::safe_charset_converter(thd, tocs);
+  return const_charset_converter(thd, tocs, true, fully_qualified_func_name());
+}
+
 
 String *Item_func_database::val_str(String *str)
 {
@@ -2363,54 +2376,68 @@ String *Item_func_database::val_str(String *str)
   BUG#28086) binlog_format=MIXED, but is incorrectly replicated to ''
   if binlog_format=STATEMENT.
 */
-bool Item_func_user::init(const char *user, const char *host)
+
+bool Item_func_user::init(THD *thd, const char *user, const char *host)
 {
+  DBUG_ENTER("Item_func_user::init");
   DBUG_ASSERT(fixed == 1);
+
+  /* Check if we have already calculated the value for this thread */
+  if (thd->query_id == last_query_id)
+    DBUG_RETURN(FALSE);
+  DBUG_PRINT("enter", ("user: '%s'  host: '%s'", user,host));
+
+  last_query_id= thd->query_id;
+  null_value= 0;
 
   // For system threads (e.g. replication SQL thread) user may be empty
   if (user)
   {
-    CHARSET_INFO *cs= str_value.charset();
+    CHARSET_INFO *cs= system_charset_info;
     size_t res_length= (strlen(user)+strlen(host)+2) * cs->mbmaxlen;
 
-    if (str_value.alloc((uint) res_length))
+    if (cached_value.alloc((uint) res_length))
     {
       null_value=1;
-      return TRUE;
+      DBUG_RETURN(TRUE);
     }
 
-    res_length=cs->cset->snprintf(cs, (char*)str_value.ptr(), (uint) res_length,
+    cached_value.set_charset(cs);
+    res_length=cs->cset->snprintf(cs, (char*)cached_value.ptr(),
+                                  (uint) res_length,
                                   "%s@%s", user, host);
-    str_value.length((uint) res_length);
-    str_value.mark_as_const();
+    cached_value.length((uint) res_length);
+    cached_value.mark_as_const();
   }
-  return FALSE;
+  else
+    cached_value.set("", 0, system_charset_info);
+  DBUG_RETURN(FALSE);
 }
 
-
-bool Item_func_user::fix_fields(THD *thd, Item **ref)
+String *Item_func_user::val_str(String *str)
 {
-  return (Item_func_sysconst::fix_fields(thd, ref) ||
-          init(thd->main_security_ctx.user,
-               thd->main_security_ctx.host_or_ip));
+  THD *thd= current_thd;
+  init(thd, thd->main_security_ctx.user, thd->main_security_ctx.host_or_ip);
+  return null_value ? 0 : &cached_value;
 }
 
-
-bool Item_func_current_user::fix_fields(THD *thd, Item **ref)
+String *Item_func_current_user::val_str(String *str)
 {
-  if (Item_func_sysconst::fix_fields(thd, ref))
-    return TRUE;
-
-  Security_context *ctx= context->security_ctx
-                          ? context->security_ctx : thd->security_ctx;
-  return init(ctx->priv_user, ctx->priv_host);
+  THD *thd= current_thd;
+  Security_context *ctx= (context->security_ctx ?
+                          context->security_ctx : thd->security_ctx);
+  init(thd, ctx->priv_user, ctx->priv_host);
+  return null_value ? 0 : &cached_value;
 }
+
 
 bool Item_func_current_role::fix_fields(THD *thd, Item **ref)
 {
-  if (Item_func_sysconst::fix_fields(thd, ref))
-    return 1;
+  return Item_func_sysconst::fix_fields(thd,ref) || init(thd);
+}
 
+bool Item_func_current_role::init(THD *thd)
+{
   Security_context *ctx= context->security_ctx
                           ? context->security_ctx : thd->security_ctx;
 
@@ -2420,13 +2447,21 @@ bool Item_func_current_role::fix_fields(THD *thd, Item **ref)
                        system_charset_info))
       return 1;
 
-    str_value.mark_as_const();
     return 0;
   }
-  null_value= maybe_null= 1;
+  null_value= 1;
   return 0;
 }
 
+String *Item_func_current_role::val_str(String *)
+{
+  return (null_value ? 0 : &str_value);
+}
+
+int Item_func_current_role::save_in_field(Field *field, bool no_conversions)
+{
+  return save_str_value_in_field(field, &str_value);
+}
 
 void Item_func_soundex::fix_length_and_dec()
 {
@@ -3534,7 +3569,7 @@ void Item_func_weight_string::fix_length_and_dec()
   {
     uint char_length;
     char_length= ((cs->state & MY_CS_STRNXFRM_BAD_NWEIGHTS) || !nweights) ?
-                 args[0]->max_char_length() : nweights;
+                 args[0]->max_char_length() : nweights * cs->levels_for_order;
     max_length= cs->coll->strnxfrmlen(cs, char_length * cs->mbmaxlen);
   }
   maybe_null= 1;
@@ -4118,7 +4153,7 @@ longlong Item_func_crc32::val_int()
     return 0; /* purecov: inspected */
   }
   null_value=0;
-  return (longlong) crc32(0L, (uchar*)res->ptr(), res->length());
+  return (longlong) my_checksum(0L, (uchar*)res->ptr(), res->length());
 }
 
 #ifdef HAVE_COMPRESS
@@ -4924,23 +4959,8 @@ longlong Item_dyncol_get::val_int()
     unsigned_flag= 0;            // Make it possible for caller to detect sign
     return val.x.long_value;
   case DYN_COL_DOUBLE:
-  {
-    bool error;
-    longlong num;
-
-    num= double_to_longlong(val.x.double_value, unsigned_flag, &error);
-    if (error)
-    {
-      char buff[30];
-      sprintf(buff, "%lg", val.x.double_value);
-      push_warning_printf(thd, Sql_condition::WARN_LEVEL_WARN,
-                          ER_DATA_OVERFLOW,
-                          ER_THD(thd, ER_DATA_OVERFLOW),
-                          buff,
-                          unsigned_flag ? "UNSIGNED INT" : "INT");
-    }
-    return num;
-  }
+    return Converter_double_to_longlong_with_warn(thd, val.x.double_value,
+                                                  unsigned_flag).result();
   case DYN_COL_STRING:
   {
     int error;

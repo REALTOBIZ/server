@@ -80,6 +80,35 @@ protected:
     Warn_filter_all() :Warn_filter(true, true) { }
   };
 
+  class Converter_double_to_longlong
+  {
+  protected:
+    bool m_error;
+    longlong m_result;
+  public:
+    Converter_double_to_longlong(double nr, bool unsigned_flag);
+    longlong result() const { return m_result; }
+    bool error() const { return m_error; }
+    void push_warning(THD *thd, double nr, bool unsigned_flag);
+  };
+  class Converter_double_to_longlong_with_warn:
+    public Converter_double_to_longlong
+  {
+  public:
+    Converter_double_to_longlong_with_warn(THD *thd, double nr,
+                                           bool unsigned_flag)
+      :Converter_double_to_longlong(nr, unsigned_flag)
+    {
+      if (m_error)
+        push_warning(thd, nr, unsigned_flag);
+    }
+    Converter_double_to_longlong_with_warn(double nr, bool unsigned_flag)
+      :Converter_double_to_longlong(nr, unsigned_flag)
+    {
+      if (m_error)
+        push_warning(current_thd, nr, unsigned_flag);
+    }
+  };
 
   // String-to-number converters
   class Converter_string_to_number
@@ -394,7 +423,9 @@ enum Derivation
 #define MY_REPERTOIRE_NUMERIC   MY_REPERTOIRE_ASCII
 
 /* The length of the header part for each virtual column in the .frm file */
-#define FRM_VCOL_HEADER_SIZE(b) (3 + MY_TEST(b))
+#define FRM_VCOL_OLD_HEADER_SIZE(b) (3 + MY_TEST(b))
+#define FRM_VCOL_NEW_BASE_SIZE 16
+#define FRM_VCOL_NEW_HEADER_SIZE 6
 
 class Count_distinct_field;
 
@@ -404,7 +435,6 @@ struct st_cache_field;
 int field_conv(Field *to,Field *from);
 int truncate_double(double *nr, uint field_length, uint dec,
                     bool unsigned_flag, double max_value);
-longlong double_to_longlong(double nr, bool unsigned_flag, bool *error);
 
 inline uint get_enum_pack_length(int elements)
 {
@@ -544,6 +574,12 @@ inline bool is_temporal_type_with_time(enum_field_types type)
   }
 }
 
+/* Bits for type of vcol expression */
+#define VCOL_DETERMINISTIC     0                /* Normal (no bit set) */
+#define VCOL_UNKNOWN           1  /* UDF used; Need fix_fields() to know */
+#define VCOL_NON_DETERMINISTIC 2
+#define VCOL_TIME_FUNC         4
+#define VCOL_IMPOSSIBLE        8
 
 /*
   Virtual_column_info is the class to contain additional
@@ -569,18 +605,21 @@ private:
 public:
   /* Flag indicating  that the field is physically stored in the database */
   bool stored_in_db;
+  bool utf8;                                    /* Already in utf8 */
   /* The expression to compute the value of the virtual column */
   Item *expr_item;
   /* Text representation of the defining expression */
   LEX_STRING expr_str;
+  LEX_STRING name;                              /* Name of constraint */
+  uint flags;
 
   Virtual_column_info()
   : field_type((enum enum_field_types)MYSQL_TYPE_VIRTUAL),
     in_partitioning_expr(FALSE), stored_in_db(FALSE),
-    expr_item(NULL)
+    utf8(TRUE), expr_item(NULL), flags(0)
   {
-    expr_str.str= NULL;
-    expr_str.length= 0;
+    expr_str.str= name.str= NULL;
+    name.length= 0;
   };
   ~Virtual_column_info() {}
   enum_field_types get_real_type()
@@ -735,11 +774,12 @@ public:
   Column_statistics_collected *collected_stats;
 
   /* 
-    This is additional data provided for any computed(virtual) field.
-    In particular it includes a pointer to the item by  which this field
+    This is additional data provided for any computed(virtual) field,
+    default function or check constraint.
+    In particular it includes a pointer to the item by which this field
     can be computed from other fields.
   */
-  Virtual_column_info *vcol_info;
+  Virtual_column_info *vcol_info, *check_constraint, *default_value;
 
   Field(uchar *ptr_arg,uint32 length_arg,uchar *null_ptr_arg,
         uchar null_bit_arg, utype unireg_check_arg,
@@ -879,26 +919,18 @@ public:
     my_ptrdiff_t l_offset= (my_ptrdiff_t) (record -  table->record[0]);
     return ptr + l_offset;
   }
-  virtual void set_default()
-  {
-    my_ptrdiff_t l_offset= (my_ptrdiff_t) (table->s->default_values -
-					  table->record[0]);
-    memcpy(ptr, ptr + l_offset, pack_length());
-    if (maybe_null_in_table())
-      *null_ptr= ((*null_ptr & (uchar) ~null_bit) |
-		  (null_ptr[l_offset] & null_bit));
-  }
+  virtual void set_default();
 
   bool has_insert_default_function() const
   {
-    return unireg_check == TIMESTAMP_DN_FIELD ||
-      unireg_check == TIMESTAMP_DNUN_FIELD;
+    return (unireg_check == TIMESTAMP_DN_FIELD ||
+            unireg_check == TIMESTAMP_DNUN_FIELD);
   }
 
   bool has_update_default_function() const
   {
-    return unireg_check == TIMESTAMP_UN_FIELD ||
-      unireg_check == TIMESTAMP_DNUN_FIELD;
+    return (unireg_check == TIMESTAMP_UN_FIELD ||
+            unireg_check == TIMESTAMP_DNUN_FIELD);
   }
 
   /*
@@ -907,9 +939,15 @@ public:
   */
   void set_has_explicit_value()
   {
-    flags|= HAS_EXPLICIT_VALUE;
+    if (table->has_value_set)             /* If we have default functions */
+      bitmap_set_bit(table->has_value_set, field_index);
   }
-
+  bool has_explicit_value()
+  {
+    /* This function is only called when we have default functions */
+    DBUG_ASSERT(table->has_value_set);
+    return bitmap_is_set(table->has_value_set, field_index);
+  }
   virtual void set_explicit_default(Item *value);
 
   /**
@@ -1250,11 +1288,12 @@ public:
   { return binary() ? &my_charset_bin : charset(); }
   virtual CHARSET_INFO *sort_charset(void) const { return charset(); }
   virtual bool has_charset(void) const { return FALSE; }
-  virtual void set_charset(CHARSET_INFO *charset_arg) { }
   virtual enum Derivation derivation(void) const
   { return DERIVATION_IMPLICIT; }
   virtual uint repertoire(void) const { return MY_REPERTOIRE_UNICODE30; }
-  virtual void set_derivation(enum Derivation derivation_arg) { }
+  virtual void set_derivation(enum Derivation derivation_arg,
+                              uint repertoire_arg)
+  { }
   virtual int set_time() { return 1; }
   bool set_warning(Sql_condition::enum_warning_level, unsigned int code,
                    int cuted_increment) const;
@@ -1507,6 +1546,10 @@ protected:
 
 class Field_num :public Field {
 protected:
+  int check_edom_and_important_data_truncation(const char *type, bool edom,
+                                               CHARSET_INFO *cs,
+                                               const char *str, uint length,
+                                               const char *end_of_num);
   int check_edom_and_truncation(const char *type, bool edom,
                                 CHARSET_INFO *cs,
                                 const char *str, uint length,
@@ -1584,8 +1627,10 @@ public:
 
 class Field_str :public Field {
 protected:
+  // TODO-10.2: Reuse DTCollation instead of these three members
   CHARSET_INFO *field_charset;
   enum Derivation field_derivation;
+  uint field_repertoire;
 public:
   bool can_be_substituted_to_equal_item(const Context &ctx,
                                         const Item_equal *item_equal);
@@ -1609,15 +1654,15 @@ public:
   {
     return store(str, length, &my_charset_bin);
   }
-  uint repertoire(void) const
-  {
-    return my_charset_repertoire(field_charset);
-  }
+  uint repertoire(void) const { return field_repertoire; }
   CHARSET_INFO *charset(void) const { return field_charset; }
-  void set_charset(CHARSET_INFO *charset_arg) { field_charset= charset_arg; }
   enum Derivation derivation(void) const { return field_derivation; }
-  virtual void set_derivation(enum Derivation derivation_arg)
-  { field_derivation= derivation_arg; }
+  void set_derivation(enum Derivation derivation_arg,
+                      uint repertoire_arg)
+  {
+    field_derivation= derivation_arg;
+    field_repertoire= repertoire_arg;
+  }
   bool binary() const { return field_charset == &my_charset_bin; }
   uint32 max_display_length() { return field_length; }
   friend class Create_field;
@@ -1805,6 +1850,7 @@ public:
   }
   int  reset(void);
   bool store_value(const my_decimal *decimal_value);
+  bool store_value(const my_decimal *decimal_value, int *native_error);
   void set_value_on_overflow(my_decimal *decimal_value, bool sign);
   int  store(const char *to, uint length, CHARSET_INFO *charset);
   int  store(double nr);
@@ -2130,7 +2176,13 @@ public:
   int  store(longlong nr, bool unsigned_val);
   int reset(void) { bzero(ptr,sizeof(double)); return 0; }
   double val_real(void);
-  longlong val_int(void);
+  longlong val_int(void)
+  {
+    Converter_double_to_longlong conv(Field_double::val_real(), false);
+    if (conv.error())
+      conv.push_warning(get_thd(), Field_double::val_real(), false);
+    return conv.result();
+  }
   String *val_str(String*,String *);
   bool send_binary(Protocol *protocol);
   int cmp(const uchar *,const uchar *);
@@ -3162,10 +3214,9 @@ public:
     packlength= 4;
     if (set_packlength)
     {
-      uint32 l_char_length= len_arg/cs->mbmaxlen;
-      packlength= l_char_length <= 255 ? 1 :
-                  l_char_length <= 65535 ? 2 :
-                  l_char_length <= 16777215 ? 3 : 4;
+      packlength= len_arg <= 255 ? 1 :
+                  len_arg <= 65535 ? 2 :
+                  len_arg <= 16777215 ? 3 : 4;
     }
   }
   Field_blob(uint32 packlength_arg)
@@ -3690,7 +3741,7 @@ class Column_definition: public Sql_alloc
 public:
   const char *field_name;
   LEX_STRING comment;			// Comment for field
-  Item *def, *on_update;                // Default value
+  Item *on_update;		        // ON UPDATE NOW()
   enum	enum_field_types sql_type;
   /*
     At various stages in execution this can be length of field in bytes or
@@ -3713,20 +3764,23 @@ public:
 
   uint pack_flag;
 
-  /* 
+  /*
     This is additinal data provided for any computed(virtual) field.
     In particular it includes a pointer to the item by  which this field
     can be computed from other fields.
   */
-  Virtual_column_info *vcol_info;
+  Virtual_column_info
+    *vcol_info,                      // Virtual field
+    *default_value,                  // Default value
+    *check_constraint;               // Check constraint
 
   Column_definition():
     comment(null_lex_str),
-    def(0), on_update(0), sql_type(MYSQL_TYPE_NULL),
-    flags(0), pack_length(0), key_length(0), interval(0),
-    srid(0), geom_type(Field::GEOM_GEOMETRY),
+    on_update(0), sql_type(MYSQL_TYPE_NULL),
+    flags(0), pack_length(0), key_length(0), unireg_check(Field::NONE),
+    interval(0), srid(0), geom_type(Field::GEOM_GEOMETRY),
     option_list(NULL),
-    vcol_info(0)
+    vcol_info(0), default_value(0), check_constraint(0)
   {
     interval_list.empty();
   }
@@ -3748,11 +3802,6 @@ public:
   {
     return (column_format_type)
       ((flags >> FIELD_FLAGS_COLUMN_FORMAT) & 3);
-  }
-
-  uint virtual_col_expr_maxlen()
-  {
-    return 255 - FRM_VCOL_HEADER_SIZE(interval != NULL);
   }
 
   bool has_default_function() const
@@ -3779,6 +3828,8 @@ public:
     return make_field(share, mem_root, (uchar *) 0, (uchar *) "", 0,
                       field_name_arg);
   }
+  /* Return true if default is an expression that must be saved explicitely */
+  bool has_default_expression();
 };
 
 
@@ -3875,6 +3926,8 @@ uint32 calc_pack_length(enum_field_types type,uint32 length);
 int set_field_to_null(Field *field);
 int set_field_to_null_with_conversions(Field *field, bool no_conversions);
 int convert_null_to_field_value_or_error(Field *field);
+bool check_expression(Virtual_column_info *vcol, const char *type,
+                      const char *name, bool must_be_deterministic);
 
 /*
   The following are for the interface with the .frm file

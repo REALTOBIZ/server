@@ -870,7 +870,7 @@ THD::THD(my_thread_id id, bool is_wsrep_applier)
    is_fatal_sub_stmt_error(false),
    rand_used(0),
    time_zone_used(0),
-   in_lock_tables(0),
+   in_lock_tables(0), in_stored_expression(0),
    bootstrap(0),
    derived_tables_processing(FALSE),
    waiting_on_group_commit(FALSE), has_waiter(FALSE),
@@ -1417,7 +1417,7 @@ void THD::init(void)
 			TL_WRITE);
   tx_isolation= (enum_tx_isolation) variables.tx_isolation;
   tx_read_only= variables.tx_read_only;
-  update_charset();
+  update_charset();             // plugin_thd_var() changed character sets
   reset_current_stmt_binlog_format_row();
   reset_binlog_local_stmt_filter();
   set_status_var_init();
@@ -2030,46 +2030,63 @@ bool THD::notify_shared_lock(MDL_context_owner *ctx_in_use,
 {
   THD *in_use= ctx_in_use->get_thd();
   bool signalled= FALSE;
+  DBUG_ENTER("THD::notify_shared_lock");
+  DBUG_PRINT("enter",("needs_thr_lock_abort: %d", needs_thr_lock_abort));
 
   if ((in_use->system_thread & SYSTEM_THREAD_DELAYED_INSERT) &&
       !in_use->killed)
   {
-    in_use->killed= KILL_CONNECTION;
-    mysql_mutex_lock(&in_use->mysys_var->mutex);
-    if (in_use->mysys_var->current_cond)
-      mysql_cond_broadcast(in_use->mysys_var->current_cond);
-    mysql_mutex_unlock(&in_use->mysys_var->mutex);
+    /* This code is similar to kill_delayed_threads() */
+    DBUG_PRINT("info", ("kill delayed thread"));
+    mysql_mutex_lock(&in_use->LOCK_thd_data);
+    if (in_use->killed < KILL_CONNECTION)
+      in_use->killed= KILL_CONNECTION;
+    if (in_use->mysys_var)
+    {
+      mysql_mutex_lock(&in_use->mysys_var->mutex);
+      if (in_use->mysys_var->current_cond)
+        mysql_cond_broadcast(in_use->mysys_var->current_cond);
+
+      /* Abort if about to wait in thr_upgrade_write_delay_lock */
+      in_use->mysys_var->abort= 1;
+      mysql_mutex_unlock(&in_use->mysys_var->mutex);
+    }
+    mysql_mutex_unlock(&in_use->LOCK_thd_data);
     signalled= TRUE;
   }
 
   if (needs_thr_lock_abort)
   {
     mysql_mutex_lock(&in_use->LOCK_thd_data);
-    for (TABLE *thd_table= in_use->open_tables;
-         thd_table ;
-         thd_table= thd_table->next)
+    /* If not already dying */
+    if (in_use->killed != KILL_CONNECTION_HARD)
     {
-      /*
-        Check for TABLE::needs_reopen() is needed since in some places we call
-        handler::close() for table instance (and set TABLE::db_stat to 0)
-        and do not remove such instances from the THD::open_tables
-        for some time, during which other thread can see those instances
-        (e.g. see partitioning code).
-      */
-      if (!thd_table->needs_reopen())
+      for (TABLE *thd_table= in_use->open_tables;
+           thd_table ;
+           thd_table= thd_table->next)
       {
-        signalled|= mysql_lock_abort_for_thread(this, thd_table);
-        if (this && WSREP(this) && wsrep_thd_is_BF(this, FALSE))
+        /*
+          Check for TABLE::needs_reopen() is needed since in some
+          places we call handler::close() for table instance (and set
+          TABLE::db_stat to 0) and do not remove such instances from
+          the THD::open_tables for some time, during which other
+          thread can see those instances (e.g. see partitioning code).
+        */
+        if (!thd_table->needs_reopen())
         {
-          WSREP_DEBUG("remove_table_from_cache: %llu",
-                      (unsigned long long) this->real_id);
-          wsrep_abort_thd((void *)this, (void *)in_use, FALSE);
+          signalled|= mysql_lock_abort_for_thread(this, thd_table);
+          if (this && WSREP(this) && wsrep_thd_is_BF(this, FALSE))
+          {
+            WSREP_DEBUG("remove_table_from_cache: %llu",
+                        (unsigned long long) this->real_id);
+            wsrep_abort_thd((void *)this, (void *)in_use, FALSE);
+          }
         }
       }
     }
     mysql_mutex_unlock(&in_use->LOCK_thd_data);
   }
-  return signalled;
+  DBUG_RETURN(signalled);
 }
 
 
@@ -2311,12 +2328,19 @@ bool THD::convert_string(LEX_STRING *to, CHARSET_INFO *to_cs,
 {
   DBUG_ENTER("THD::convert_string");
   size_t new_length= to_cs->mbmaxlen * from_length;
-  uint dummy_errors;
+  uint errors;
   if (alloc_lex_string(to, new_length + 1))
     DBUG_RETURN(true);                          // EOM
   to->length= copy_and_convert((char*) to->str, new_length, to_cs,
-			       from, from_length, from_cs, &dummy_errors);
+			       from, from_length, from_cs, &errors);
   to->str[to->length]= 0;                       // Safety
+  if (errors && in_stored_expression)
+  {
+    my_error(ER_BAD_DATA, MYF(0),
+             ErrConvString(from, from_length, from_cs).ptr(),
+             to_cs->csname);
+    DBUG_RETURN(true);
+  }
   DBUG_RETURN(false);
 }
 
@@ -5526,94 +5550,6 @@ int xid_cache_iterate(THD *thd, my_hash_walk_action action, void *arg)
                          &argument);
 }
 
-/*
-  Tells if two (or more) tables have auto_increment columns and we want to
-  lock those tables with a write lock.
-
-  SYNOPSIS
-    has_two_write_locked_tables_with_auto_increment
-      tables        Table list
-
-  NOTES:
-    Call this function only when you have established the list of all tables
-    which you'll want to update (including stored functions, triggers, views
-    inside your statement).
-*/
-
-static bool
-has_write_table_with_auto_increment(TABLE_LIST *tables)
-{
-  for (TABLE_LIST *table= tables; table; table= table->next_global)
-  {
-    /* we must do preliminary checks as table->table may be NULL */
-    if (!table->placeholder() &&
-        table->table->found_next_number_field &&
-        (table->lock_type >= TL_WRITE_ALLOW_WRITE))
-      return 1;
-  }
-
-  return 0;
-}
-
-/*
-   checks if we have select tables in the table list and write tables
-   with auto-increment column.
-
-  SYNOPSIS
-   has_two_write_locked_tables_with_auto_increment_and_select
-      tables        Table list
-
-  RETURN VALUES
-
-   -true if the table list has atleast one table with auto-increment column
-
-
-         and atleast one table to select from.
-   -false otherwise
-*/
-
-static bool
-has_write_table_with_auto_increment_and_select(TABLE_LIST *tables)
-{
-  bool has_select= false;
-  bool has_auto_increment_tables = has_write_table_with_auto_increment(tables);
-  for(TABLE_LIST *table= tables; table; table= table->next_global)
-  {
-     if (!table->placeholder() &&
-        (table->lock_type <= TL_READ_NO_INSERT))
-      {
-        has_select= true;
-        break;
-      }
-  }
-  return(has_select && has_auto_increment_tables);
-}
-
-/*
-  Tells if there is a table whose auto_increment column is a part
-  of a compound primary key while is not the first column in
-  the table definition.
-
-  @param tables Table list
-
-  @return true if the table exists, fais if does not.
-*/
-
-static bool
-has_write_table_auto_increment_not_first_in_pk(TABLE_LIST *tables)
-{
-  for (TABLE_LIST *table= tables; table; table= table->next_global)
-  {
-    /* we must do preliminary checks as table->table may be NULL */
-    if (!table->placeholder() &&
-        table->table->found_next_number_field &&
-        (table->lock_type >= TL_WRITE_ALLOW_WRITE)
-        && table->table->s->next_number_keypart != 0)
-      return 1;
-  }
-
-  return 0;
-}
 
 /**
   Decide on logging format to use for the statement and issue errors
@@ -5744,17 +5680,25 @@ int THD::decide_logging_format(TABLE_LIST *tables)
        If different types of engines are about to be updated.
        For example: Innodb and Falcon; Innodb and MyIsam.
     */
-    my_bool multi_write_engine= FALSE;
+    bool multi_write_engine= FALSE;
     /*
        If different types of engines are about to be accessed 
        and any of them is about to be updated. For example:
        Innodb and Falcon; Innodb and MyIsam.
     */
-    my_bool multi_access_engine= FALSE;
+    bool multi_access_engine= FALSE;
     /*
       Identifies if a table is changed.
     */
-    my_bool is_write= FALSE;
+    bool is_write= FALSE;                        // If any write tables
+    bool has_read_tables= FALSE;                 // If any read only tables
+    bool has_auto_increment_write_tables= FALSE; // Write with auto-increment
+    /* If a write table that doesn't have auto increment part first */
+    bool has_write_table_auto_increment_not_first_in_pk= FALSE;
+    bool has_auto_increment_write_tables_not_first= FALSE;
+    bool found_first_not_own_table= FALSE;
+    bool has_write_tables_with_unsafe_statements= FALSE;
+
     /*
       A pointer to a previous table that was changed.
     */
@@ -5798,31 +5742,6 @@ int THD::decide_logging_format(TABLE_LIST *tables)
     }
 #endif
 
-    if (wsrep_binlog_format() != BINLOG_FORMAT_ROW && tables)
-    {
-      /*
-        DML statements that modify a table with an auto_increment column based on
-        rows selected from a table are unsafe as the order in which the rows are
-        fetched fron the select tables cannot be determined and may differ on
-        master and slave.
-       */
-      if (has_write_table_with_auto_increment_and_select(tables))
-        lex->set_stmt_unsafe(LEX::BINLOG_STMT_UNSAFE_WRITE_AUTOINC_SELECT);
-
-      if (has_write_table_auto_increment_not_first_in_pk(tables))
-        lex->set_stmt_unsafe(LEX::BINLOG_STMT_UNSAFE_AUTOINC_NOT_FIRST);
-
-      /*
-        A query that modifies autoinc column in sub-statement can make the
-        master and slave inconsistent.
-        We can solve these problems in mixed mode by switching to binlogging
-        if at least one updated table is used by sub-statement
-       */
-      if (lex->requires_prelocking() &&
-          has_write_table_with_auto_increment(lex->first_not_own_table()))
-        lex->set_stmt_unsafe(LEX::BINLOG_STMT_UNSAFE_AUTOINC_COLUMNS);
-    }
-
     /*
       Get the capabilities vector for all involved storage engines and
       mask out the flags for the binary log.
@@ -5861,16 +5780,32 @@ int THD::decide_logging_format(TABLE_LIST *tables)
           continue;
         }
       }
+      if (table == lex->first_not_own_table())
+        found_first_not_own_table= true;
 
       replicated_tables_count++;
 
+      if (table->lock_type <= TL_READ_NO_INSERT)
+        has_read_tables= true;
+      else if (table->table->found_next_number_field &&
+                (table->lock_type >= TL_WRITE_ALLOW_WRITE))
+      {
+        has_auto_increment_write_tables= true;
+        has_auto_increment_write_tables_not_first= found_first_not_own_table;
+        if (table->table->s->next_number_keypart != 0)
+          has_write_table_auto_increment_not_first_in_pk= true;
+      }
+
       if (table->lock_type >= TL_WRITE_ALLOW_WRITE)
       {
+        bool trans;
         if (prev_write_table && prev_write_table->file->ht !=
             table->table->file->ht)
           multi_write_engine= TRUE;
+        if (table->table->s->non_determinstic_insert)
+          has_write_tables_with_unsafe_statements= true;
 
-        my_bool trans= table->table->file->has_transactions();
+        trans= table->table->file->has_transactions();
 
         if (table->table->s->tmp_table)
           lex->set_stmt_accessed_table(trans ? LEX::STMT_WRITES_TEMP_TRANS_TABLE :
@@ -5906,6 +5841,34 @@ int THD::decide_logging_format(TABLE_LIST *tables)
         multi_access_engine= TRUE;
 
       prev_access_table= table->table;
+    }
+
+    if (wsrep_binlog_format() != BINLOG_FORMAT_ROW)
+    {
+      /*
+        DML statements that modify a table with an auto_increment
+        column based on rows selected from a table are unsafe as the
+        order in which the rows are fetched fron the select tables
+        cannot be determined and may differ on master and slave.
+      */
+      if (has_auto_increment_write_tables && has_read_tables)
+        lex->set_stmt_unsafe(LEX::BINLOG_STMT_UNSAFE_WRITE_AUTOINC_SELECT);
+
+      if (has_write_table_auto_increment_not_first_in_pk)
+        lex->set_stmt_unsafe(LEX::BINLOG_STMT_UNSAFE_AUTOINC_NOT_FIRST);
+
+      if (has_write_tables_with_unsafe_statements)
+        lex->set_stmt_unsafe(LEX::BINLOG_STMT_UNSAFE_SYSTEM_FUNCTION);
+
+      /*
+        A query that modifies autoinc column in sub-statement can make the
+        master and slave inconsistent.
+        We can solve these problems in mixed mode by switching to binlogging
+        if at least one updated table is used by sub-statement
+      */
+      if (lex->requires_prelocking() &&
+          has_auto_increment_write_tables_not_first)
+        lex->set_stmt_unsafe(LEX::BINLOG_STMT_UNSAFE_AUTOINC_COLUMNS);
     }
 
     DBUG_PRINT("info", ("flags_write_all_set: 0x%llx", flags_write_all_set));

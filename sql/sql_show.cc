@@ -815,18 +815,36 @@ ignore_db_dirs_process_additions()
   for (i= 0; i < ignore_db_dirs_array.elements; i++)
   {
     get_dynamic(&ignore_db_dirs_array, (uchar *) &dir, i);
-    if (my_hash_insert(&ignore_db_dirs_hash, (uchar *) dir))
-      return true;
-    ptr= strnmov(ptr, dir->str, dir->length);
-    if (i + 1 < ignore_db_dirs_array.elements)
-      ptr= strmov(ptr, ",");
+    if (my_hash_insert(&ignore_db_dirs_hash, (uchar *)dir))
+    {
+      /* ignore duplicates from the config file */
+      if (my_hash_search(&ignore_db_dirs_hash, (uchar *)dir->str, dir->length))
+      {
+        sql_print_warning("Duplicate ignore-db-dir directory name '%.*s' "
+                          "found in the config file(s). Ignoring the duplicate.",
+                          (int) dir->length, dir->str);
+        my_free(dir);
+        goto continue_loop;
+      }
 
+      return true;
+    }
+    ptr= strnmov(ptr, dir->str, dir->length);
+    *(ptr++)= ',';
+
+continue_loop:
     /*
       Set the transferred array element to NULL to avoid double free
       in case of error.
     */
     dir= NULL;
     set_dynamic(&ignore_db_dirs_array, (uchar *) &dir, i);
+  }
+
+  if (ptr > opt_ignore_db_dirs)
+  {
+    ptr--;
+    DBUG_ASSERT(*ptr == ',');
   }
 
   /* make sure the string is terminated */
@@ -1625,16 +1643,31 @@ static bool get_field_default_value(THD *thd, Field *field, String *def_value,
   */
   has_now_default= field->has_insert_default_function();
 
-  has_default= (field_type != FIELD_TYPE_BLOB &&
-                !(field->flags & NO_DEFAULT_VALUE_FLAG) &&
-                field->unireg_check != Field::NEXT_NUMBER &&
-                !((thd->variables.sql_mode & (MODE_MYSQL323 | MODE_MYSQL40))
-                  && has_now_default));
+  has_default= (field->default_value ||
+                (!(field->flags & NO_DEFAULT_VALUE_FLAG) &&
+                 field->unireg_check != Field::NEXT_NUMBER &&
+                 !((thd->variables.sql_mode & (MODE_MYSQL323 | MODE_MYSQL40))
+                   && has_now_default)));
 
   def_value->length(0);
   if (has_default)
   {
-    if (has_now_default)
+    if (field->default_value)
+    {
+      if (field->default_value->expr_item->need_parentheses_in_default())
+      {
+        def_value->set_charset(&my_charset_utf8mb4_general_ci);
+        def_value->append('(');
+        def_value->append(field->default_value->expr_str.str,
+                          field->default_value->expr_str.length);
+        def_value->append(')');
+      }
+      else
+        def_value->set(field->default_value->expr_str.str,
+                       field->default_value->expr_str.length,
+                       &my_charset_utf8mb4_general_ci);
+    }
+    else if (has_now_default)
     {
       def_value->append(STRING_WITH_LEN("CURRENT_TIMESTAMP"));
       if (field->decimals() > 0)
@@ -1886,7 +1919,7 @@ int show_create_table(THD *thd, TABLE_LIST *table_list, String *packet,
       packet->append(STRING_WITH_LEN(" AS ("));
       packet->append(field->vcol_info->expr_str.str,
                      field->vcol_info->expr_str.length,
-                     system_charset_info);
+                     &my_charset_utf8mb4_general_ci);
       packet->append(STRING_WITH_LEN(")"));
       if (field->vcol_info->stored_in_db)
         packet->append(STRING_WITH_LEN(" PERSISTENT"));
@@ -1922,6 +1955,14 @@ int show_create_table(THD *thd, TABLE_LIST *table_list, String *packet,
       if (field->unireg_check == Field::NEXT_NUMBER &&
           !(sql_mode & MODE_NO_FIELD_OPTIONS))
         packet->append(STRING_WITH_LEN(" AUTO_INCREMENT"));
+    }
+    if (field->check_constraint)
+    {
+      packet->append(STRING_WITH_LEN(" CHECK ("));
+      packet->append(field->check_constraint->expr_str.str,
+                     field->check_constraint->expr_str.length,
+                     &my_charset_utf8mb4_general_ci);
+      packet->append(STRING_WITH_LEN(")"));
     }
 
     if (field->comment.length)
@@ -2010,6 +2051,28 @@ int show_create_table(THD *thd, TABLE_LIST *table_list, String *packet,
   {
     packet->append(for_str, strlen(for_str));
     file->free_foreign_key_create_info(for_str);
+  }
+
+  /* Add table level check constraints */
+  if (share->table_check_constraints)
+  {
+    for (uint i= share->field_check_constraints;
+         i < share->table_check_constraints ; i++)
+    {
+      Virtual_column_info *check= table->check_constraints[i];
+
+      packet->append(STRING_WITH_LEN(",\n  "));
+      if (check->name.length)
+      {
+        packet->append(STRING_WITH_LEN("CONSTRAINT "));
+        append_identifier(thd, packet, check->name.str, check->name.length);
+      }
+      packet->append(STRING_WITH_LEN(" CHECK ("));
+      packet->append(check->expr_str.str,
+                     check->expr_str.length,
+                     &my_charset_utf8mb4_general_ci);
+      packet->append(STRING_WITH_LEN(")"));
+    }
   }
 
   packet->append(STRING_WITH_LEN("\n)"));

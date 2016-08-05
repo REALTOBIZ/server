@@ -26,14 +26,6 @@
 #include <cstdio>
 #include <cstdlib>
 
-const  char* wsrep_provider         = 0;
-const  char* wsrep_provider_options = 0;
-const  char* wsrep_cluster_address  = 0;
-const  char* wsrep_cluster_name     = 0;
-const  char* wsrep_node_name        = 0;
-const  char* wsrep_node_address     = 0;
-const  char* wsrep_node_incoming_address = 0;
-const  char* wsrep_start_position   = 0;
 
 int wsrep_init_vars()
 {
@@ -45,8 +37,6 @@ int wsrep_init_vars()
   wsrep_node_address    = my_strdup("", MYF(MY_WME));
   wsrep_node_incoming_address= my_strdup(WSREP_NODE_INCOMING_AUTO, MYF(MY_WME));
   wsrep_start_position  = my_strdup(WSREP_START_POSITION_ZERO, MYF(MY_WME));
-
-  global_system_variables.binlog_format=BINLOG_FORMAT_ROW;
   return 0;
 }
 
@@ -384,7 +374,16 @@ bool wsrep_cluster_address_check (sys_var *self, THD* thd, set_var* var)
 
 bool wsrep_cluster_address_update (sys_var *self, THD* thd, enum_var_type type)
 {
-  bool wsrep_on_saved= thd->variables.wsrep_on;
+  bool wsrep_on_saved;
+
+  /* Do not proceed if wsrep provider is not loaded. */
+  if (!wsrep)
+  {
+    WSREP_INFO("wsrep provider is not loaded, can't re(start) replication.");
+    return false;
+  }
+
+  wsrep_on_saved= thd->variables.wsrep_on;
   thd->variables.wsrep_on= false;
 
   /* stop replication is heavy operation, and includes closing all client 

@@ -1,5 +1,5 @@
 /* Copyright (c) 2000, 2013, Oracle and/or its affiliates.
-   Copyright (c) 2009, 2013, Monty Program Ab.
+   Copyright (c) 2009, 2016, Monty Program Ab.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -1033,7 +1033,7 @@ static void init_connection_thd(struct st_connection *cn)
   cn->has_thread=TRUE;
 }
 
-#else /*EMBEDDED_LIBRARY*/
+#else /* ! EMBEDDED_LIBRARY*/
 
 #define init_connection_thd(X)    do { } while(0)
 #define do_send_query(cn,q,q_len) mysql_send_query(cn->mysql, q, q_len)

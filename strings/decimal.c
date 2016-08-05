@@ -928,6 +928,8 @@ internal_str2dec(const char *from, decimal_t *to, char **end, my_bool fixed)
         error= decimal_shift(to, (int) exponent);
     }
   }
+  if (to->sign && decimal_is_zero(to))
+    to->sign= 0;
   return error;
 
 fatal_error:
@@ -1005,7 +1007,7 @@ static int ull2dec(ulonglong from, decimal_t *to)
     error=E_DEC_OVERFLOW;
   }
   to->frac=0;
-  to->intg=intg1*DIG_PER_DEC1;
+  for(to->intg= (intg1-1)*DIG_PER_DEC1; from; to->intg++, from/=10) {}
 
   for (buf=to->buf+intg1; intg1; intg1--)
   {

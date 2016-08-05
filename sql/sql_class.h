@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2000, 2015, Oracle and/or its affiliates.
+   Copyright (c) 2000, 2016, Oracle and/or its affiliates.
    Copyright (c) 2009, 2016, MariaDB
 
    This program is free software; you can redistribute it and/or modify
@@ -227,6 +227,7 @@ typedef struct st_copy_info {
   List<Item> *update_values;
   /* for VIEW ... WITH CHECK OPTION */
   TABLE_LIST *view;
+  TABLE_LIST *table_list;                       /* Normal table */
 } COPY_INFO;
 
 
@@ -257,7 +258,7 @@ public:
 
 class Alter_drop :public Sql_alloc {
 public:
-  enum drop_type {KEY, COLUMN, FOREIGN_KEY };
+  enum drop_type {KEY, COLUMN, FOREIGN_KEY, CHECK_CONSTRAINT };
   const char *name;
   enum drop_type type;
   bool drop_if_exists;
@@ -272,15 +273,21 @@ public:
   */
   Alter_drop *clone(MEM_ROOT *mem_root) const
     { return new (mem_root) Alter_drop(*this); }
+  const char *type_name()
+  {
+    return type == COLUMN ? "COLUMN" :
+           type == CHECK_CONSTRAINT ? "CONSTRAINT" :
+           type == KEY ? "INDEX" : "FOREIGN KEY";
+  }
 };
 
 
 class Alter_column :public Sql_alloc {
 public:
   const char *name;
-  Item *def;
-  Alter_column(const char *par_name,Item *literal)
-    :name(par_name), def(literal) {}
+  Virtual_column_info *default_value;
+  Alter_column(const char *par_name, Virtual_column_info *expr)
+    :name(par_name), default_value(expr) {}
   /**
     Used to make a clone of this object for ALTER/CREATE TABLE
     @sa comment for Key_part_spec::clone
@@ -1494,7 +1501,7 @@ public:
   ha_rows    cuted_fields, sent_row_count, examined_row_count;
   ulonglong client_capabilities;
   ulong query_plan_flags; 
-  uint in_sub_stmt;
+  uint in_sub_stmt;    /* 0,  SUB_STMT_TRIGGER or SUB_STMT_FUNCTION */
   bool enable_slow_log;
   bool last_insert_id_used;
   SAVEPOINT *savepoints;
@@ -2280,6 +2287,18 @@ public:
                 current_stmt_binlog_format == BINLOG_FORMAT_ROW);
     return current_stmt_binlog_format == BINLOG_FORMAT_ROW;
   }
+  /**
+    Determine if binlogging is disabled for this session
+    @retval 0 if the current statement binlogging is disabled
+              (could be because of binlog closed/binlog option
+               is set to false).
+    @retval 1 if the current statement will be binlogged
+  */
+  inline bool is_current_stmt_binlog_disabled() const
+  {
+    return (!(variables.option_bits & OPTION_BIN_LOG) ||
+            !mysql_bin_log.is_open());
+  }
 
   enum binlog_filter_state
   {
@@ -2842,7 +2861,7 @@ public:
   bool       query_start_sec_part_used;
   /* for IS NULL => = last_insert_id() fix in remove_eq_conds() */
   bool       substitute_null_with_insert_id;
-  bool	     in_lock_tables;
+  bool	     in_lock_tables, in_stored_expression;
   bool       bootstrap, cleanup_done, free_connection_done;
 
   /**  is set if some thread specific value(s) used in a statement. */
@@ -3423,6 +3442,22 @@ public:
 
   inline CHARSET_INFO *charset() { return variables.character_set_client; }
   void update_charset();
+  void update_charset(CHARSET_INFO *character_set_client,
+                      CHARSET_INFO *collation_connection)
+  {
+    variables.character_set_client= character_set_client;
+    variables.collation_connection= collation_connection;
+    update_charset();
+  }
+  void update_charset(CHARSET_INFO *character_set_client,
+                      CHARSET_INFO *collation_connection,
+                      CHARSET_INFO *character_set_results)
+  {
+    variables.character_set_client= character_set_client;
+    variables.collation_connection= collation_connection;
+    variables.character_set_results= character_set_results;
+    update_charset();
+  }
 
   inline Query_arena *activate_stmt_arena_if_needed(Query_arena *backup)
   {
@@ -4635,7 +4670,8 @@ public:
                 Alter_info *alter_info_arg,
                 List<Item> &select_fields,enum_duplicates duplic, bool ignore,
                 TABLE_LIST *select_tables_arg):
-    select_insert(thd_arg, NULL, NULL, &select_fields, 0, 0, duplic, ignore),
+    select_insert(thd_arg, table_arg, NULL, &select_fields, 0, 0, duplic,
+                  ignore),
     create_table(table_arg),
     create_info(create_info_par),
     select_tables(select_tables_arg),
